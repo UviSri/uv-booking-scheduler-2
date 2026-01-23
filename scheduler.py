@@ -157,10 +157,10 @@ def main():
 
     # Prepare telegram minimal text and minimal log
     if confirmed_line:
-        telegram_text = f"Booking Date: {booking_date}\n\n{confirmed_line}"
+        telegram_text = f"Booking Date from 2: {booking_date}\n\n{confirmed_line}"
         write_minimal_log_line(confirmed_line)
     else:
-        telegram_text = f"Booking Date: {booking_date}\n\nNo slots available"
+        telegram_text = f"Booking Date from 2: {booking_date}\n\nNo slots available"
         write_minimal_log_line("No slots available")
 
     # Trim to safe length
