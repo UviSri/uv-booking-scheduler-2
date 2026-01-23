@@ -3,8 +3,8 @@
   "flatId": "1711676",
   "api_url": "https://in.adda.io/ajax/post_facility.php?action=bookFacility&selected_facility_id=8647",
   "slots": [
-    "20:00:00,20:30:00,0.00,0",
     "07:00:00,08:00:00,0.00,0",
+    "20:00:00,20:30:00,0.00,0",
     "21:00:00,21:30:00,0.00,0",
   ]
 }
