@@ -2,7 +2,8 @@ name: Daily Booking
 
 on:
   schedule:
-    - cron: "29 20 * * *"   # 05:59 AM IST daily
+    #- cron: "29 20 * * *"   # 05:59 AM IST daily
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
