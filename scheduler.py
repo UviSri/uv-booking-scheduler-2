@@ -33,13 +33,23 @@ POSTMAN_HEADERS = {
 }
 
 # Flats mapping
+# flats_info = {
+#     "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_SY", "display": "Sanjay"},
+#     "Flat_SD": {"flat_number": "1711888", "cookie_env": "Flat_SD", "display": "Sadu"},
+#     "Flat_Y": {"flat_number": "1711999", "cookie_env": "Flat_Y", "display": "Yuvi"},
+#     "Flat_D": {"flat_number": "1712001", "cookie_env": "Flat_D", "display": "Dev"},
+#     "Flat_M": {"flat_number": "1712050", "cookie_env": "Flat_M", "display": "Manoj"},
+# }
+
+############### Temporary ##################################
 flats_info = {
-    "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_SY", "display": "Sanjay"},
-    "Flat_SD": {"flat_number": "1711888", "cookie_env": "Flat_SD", "display": "Sadu"},
-    "Flat_Y": {"flat_number": "1711999", "cookie_env": "Flat_Y", "display": "Yuvi"},
-    "Flat_D": {"flat_number": "1712001", "cookie_env": "Flat_D", "display": "Dev"},
-    "Flat_M": {"flat_number": "1712050", "cookie_env": "Flat_M", "display": "Manoj"},
+    "Flat_Y": {"flat_number": "1711676", "cookie_env": "Flat_Y", "display": "Yuvi"},
+    "Flat_D": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "Dev"},
+    "Flat_SD": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Sadu"},
+    "Flat_M": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "(Sadu) Manoj"},  # alias Flat_SD
+    "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "(Dev) Sanjay"}  # alias Flat_D
 }
+
 
 def now_ist():
     return datetime.now(IST)
