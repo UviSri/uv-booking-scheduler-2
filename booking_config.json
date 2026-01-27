@@ -1,10 +1,25 @@
 {
   "facilityId": "8647",
-  "flatId": "1711676",
   "api_url": "https://in.adda.io/ajax/post_facility.php?action=bookFacility&selected_facility_id=8647",
-  "slots": [
-    "07:00:00,08:00:00,0.00,0",
-    "20:00:00,20:30:00,0.00,0",
-    "21:00:00,21:30:00,0.00,0"
-  ]
+
+  "weekday_flat_map": {
+    "Monday": ["Flat_SY", "Flat_SD"],
+    "Tuesday": ["Flat_Y", "Flat_D"],
+    "Wednesday": ["Flat_Y", "Flat_SY"],
+    "Thursday": ["Flat_M", "Flat_SD"],
+    "Friday": ["Flat_D", "Flat_M"],
+    "Saturday": ["Flat_Y", "Flat_D"],
+    "Sunday": ["Flat_Y", "Flat_D"]
+  },
+
+  "slots": {
+    "morning": [
+      "07:00:00,07:30:00,0.00,0",
+      "07:30:00,08:00:00,0.00,0"
+    ],
+    "night": [
+      "20:00:00,20:30:00,0.00,0",
+      "20:30:00,21:00:00,0.00,0"
+    ]
+  }
 }
