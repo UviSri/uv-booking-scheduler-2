@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 Scheduler with:
-- fixed weekday flat pairing
-- cookie name == flat name
-- 30-min paired booking
+- weekday flat pairing
+- flat reference mapping
+- cookies + flat number
+- paired 30-min booking
 - simultaneous API hits
-- weekday-based slot strategy
+- facUserId in Telegram
 """
 
 import os
-import time
 import json
 import threading
 import requests
@@ -32,6 +32,15 @@ POSTMAN_HEADERS = {
     "x-requested-with": "XMLHttpRequest"
 }
 
+# Flats mapping
+flats_info = {
+    "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_SY", "display": "Sanjay"},
+    "Flat_SD": {"flat_number": "1711888", "cookie_env": "Flat_SD", "display": "Sadu"},
+    "Flat_Y": {"flat_number": "1711999", "cookie_env": "Flat_Y", "display": "Yuvi"},
+    "Flat_D": {"flat_number": "1712001", "cookie_env": "Flat_D", "display": "Dev"},
+    "Flat_M": {"flat_number": "1712050", "cookie_env": "Flat_M", "display": "Manoj"},
+}
+
 def now_ist():
     return datetime.now(IST)
 
@@ -47,39 +56,47 @@ def send_telegram(msg):
     except Exception:
         pass
 
-def make_booking(api_url, facility_id, booking_date, flat, slot, result, key):
+def make_booking(api_url, booking_date, flat_ref, slot, result, key):
+    flat_number = flats_info[flat_ref]["flat_number"]
+    cookie = os.getenv(flats_info[flat_ref]["cookie_env"])
+
     payload = {
         "facilityId": facility_id,
         "bookDate": booking_date,
         "slot": slot,
-        "flatId": flat
+        "flatId": flat_number
     }
 
     headers = POSTMAN_HEADERS.copy()
-    headers["cookie"] = os.getenv(flat)
+    headers["cookie"] = cookie
 
     try:
         r = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        msg = r.json().get("message", "") if r.headers.get("content-type","").startswith("application/json") else r.text
-        result[key] = msg
+        data = r.json()
+        result[key] = {
+            "success": data.get("message") == "Amenity has been Reserved",
+            "facUserId": data.get("data", {}).get("facUserId")
+        }
     except Exception as e:
-        result[key] = f"Exception: {e}"
+        result[key] = {
+            "success": False,
+            "facUserId": None
+        }
 
-def try_slot_pair(api_url, facility_id, booking_date, flats, slots):
-    results = {}
+def try_slot_pair(api_url, booking_date, flats_pair, slots_pair):
+    result = {}
 
     t1 = threading.Thread(target=make_booking,
-        args=(api_url, facility_id, booking_date, flats[0], slots[0], results, 1))
+                          args=(api_url, booking_date, flats_pair[0], slots_pair[0], result, 1))
     t2 = threading.Thread(target=make_booking,
-        args=(api_url, facility_id, booking_date, flats[1], slots[1], results, 2))
+                          args=(api_url, booking_date, flats_pair[1], slots_pair[1], result, 2))
 
     t1.start(); t2.start()
     t1.join(); t2.join()
 
-    return (
-        results.get(1) == "Amenity has been Reserved" and
-        results.get(2) == "Amenity has been Reserved"
-    ), results
+    if result.get(1, {}).get("success") and result.get(2, {}).get("success"):
+        return True, result
+    return False, result
 
 def main():
     cfg = json.load(open(CONFIG_PATH))
@@ -87,47 +104,53 @@ def main():
     today = now_ist().strftime("%A")
     booking_date = (now_ist() + timedelta(days=2)).strftime("%d-%m-%Y")
 
-    flats = cfg["weekday_flat_map"].get(today)
-    if not flats:
+    flats_pair = cfg["weekday_flat_map"].get(today)
+    if not flats_pair:
         send_telegram(f"❌ No flat mapping for {today}")
         return
 
-    for f in flats:
-        if not os.getenv(f):
-            send_telegram(f"🔒 COOKIE missing for {f}")
+    for f in flats_pair:
+        if not os.getenv(flats_info[f]["cookie_env"]):
+            send_telegram(f"🔒 COOKIE missing for {flats_info[f]['display']}")
             return
 
+    global facility_id
     facility_id = cfg["facilityId"]
     api_url = cfg["api_url"]
     slots = cfg["slots"]
 
-    booked_slots = []
+    booked_info = []
 
     # Weekend logic
     if today in ("Saturday", "Sunday"):
-        success, _ = try_slot_pair(
-            api_url, facility_id, booking_date, flats, slots["night"]
-        )
+        success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["night"])
         if success:
-            booked_slots.extend(slots["night"])
+            booked_info = [
+                (slots["night"][0], flats_pair[0], res[1]["facUserId"]),
+                (slots["night"][1], flats_pair[1], res[2]["facUserId"])
+            ]
     else:
-        # Weekday: try morning first
-        success, _ = try_slot_pair(
-            api_url, facility_id, booking_date, flats, slots["morning"]
-        )
+        # Weekday → morning first
+        success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["morning"])
         if success:
-            booked_slots.extend(slots["morning"])
+            booked_info = [
+                (slots["morning"][0], flats_pair[0], res[1]["facUserId"]),
+                (slots["morning"][1], flats_pair[1], res[2]["facUserId"])
+            ]
         else:
-            success, _ = try_slot_pair(
-                api_url, facility_id, booking_date, flats, slots["night"]
-            )
+            success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["night"])
             if success:
-                booked_slots.extend(slots["night"])
+                booked_info = [
+                    (slots["night"][0], flats_pair[0], res[1]["facUserId"]),
+                    (slots["night"][1], flats_pair[1], res[2]["facUserId"])
+                ]
 
-    if booked_slots:
-        msg = f"Booking Date: {booking_date}\nFlats: {flats[0]} & {flats[1]}\n\n"
-        msg += "\n".join(booked_slots)
-        send_telegram(msg)
+    if booked_info:
+        msg = f"Booking Date: {booking_date}\nFlats: {flats_info[flats_pair[0]]['display']} & {flats_info[flats_pair[1]]['display']}\n\n"
+        for slot, flat_ref, fac_id in booked_info:
+            msg += f"{slot} → {flats_info[flat_ref]['display']} → facUserId: {fac_id}\n"
+
+        send_telegram(msg.strip())
         open(LOG_FILE, "w").write(msg)
     else:
         send_telegram(f"Booking Date: {booking_date}\nNo slots available")
