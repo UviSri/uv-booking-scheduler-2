@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
 """
-Final Scheduler
-- Waits until 06:00 IST if started early
-- Weekday flat pairing
-- Independent cookies per flat
-- Today + 2 days booking
-- Parallel 30-min slot booking
-- facUserId in Telegram
-- Booking Alert prefix for ALL Telegram messages
+Scheduler.py — Weekday booking with morning/evening fallback.
+Sends Telegram alerts with Booking Alert header and writes log.
 """
 
 import os
-import json
 import time
+import json
 import threading
 import requests
 from datetime import datetime, timedelta
@@ -25,151 +19,163 @@ LOG_FILE = "booking_log.txt"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Postman-like headers
 POSTMAN_HEADERS = {
     "accept": "application/json, text/plain, */*",
     "content-type": "application/json;charset=UTF-8",
     "origin": "https://in.adda.io",
     "referer": "https://in.adda.io/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
     "x-requested-with": "XMLHttpRequest"
 }
 
-# Flat configuration
-FLATS = {
-    "Flat_Y":  {"flat_id": "1711676", "display": "Yuvi"},
-    "Flat_D":  {"flat_id": "1711772", "display": "Dev"},
-    "Flat_SD": {"flat_id": "1711056", "display": "Sadu"},
-    "Flat_M":  {"flat_id": "1711888", "display": "Manoj"},
-    "Flat_SY": {"flat_id": "1711289", "display": "Sanjay"}
+# Flats info
+flats_info = {
+    "Flat_Y": {"flat_number": "1711676", "cookie_env": "Flat_Y", "display": "Yuvi"},
+    "Flat_D": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "Dev"},
+    "Flat_SD": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Sadu"},
+    # "Flat_M": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Manoj"},  # alias
+    "Flat_M": {"flat_number": "1711289", "cookie_env": "Flat_SY", "display": "Manoj (Sanjay)"}  # now own cookie
+    "Flat_SY": {"flat_number": "1711289", "cookie_env": "Flat_SY", "display": "Sanjay"}  # now own cookie
 }
+
+# Weekday flat pairs
+WEEKDAY_FLAT_PAIRS = {
+    "Monday": ["Flat_SY", "Flat_SD"],
+    "Tuesday": ["Flat_Y", "Flat_D"],
+    "Wednesday": ["Flat_Y", "Flat_SY"],
+    "Thursday": ["Flat_M", "Flat_SD"],
+    "Friday": ["Flat_D", "Flat_M"]
+}
+
+# Slot pairs
+MORNING_SLOTS = ["07:00:00,07:30:00,0.00,0", "07:30:00,08:00:00,0.00,0"]
+EVENING_SLOTS = ["20:00:00,20:30:00,0.00,0", "20:30:00,21:00:00,0.00,0"]
+
+# Attempts
+ATTEMPTS_PER_SLOT = 3
+GAP_BETWEEN_ATTEMPTS = 0.05  # 50ms
 
 def now_ist():
     return datetime.now(IST)
 
-# 🔐 Wait logic (from your reference code)
-def wait_until_6_or_run_now():
-    now = now_ist()
-    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
-
-    if now >= target:
-        return
-
-    while True:
-        diff = (target - now_ist()).total_seconds()
-        if diff <= 2:
-            break
+def wait_until_6_am():
+    target = now_ist().replace(hour=6, minute=0, second=0, microsecond=0)
+    while now_ist() < target:
         time.sleep(1)
 
-    while now_ist() < target:
-        pass
-
-# 📩 Telegram sender (always Booking Alert)
-def send_telegram(message):
+def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
-    final_msg = f"🚨 Booking Alert 🚨\n\n{message}"
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": final_msg},
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": f"🚨 Booking Alert 🚨\n\n{msg}"},
             timeout=10
         )
-    except Exception:
+    except:
         pass
 
 def get_cookie(flat):
-    cookie = os.getenv(flat.upper())
+    cookie = os.getenv(flats_info[flat]["cookie_env"])
     if not cookie:
-        raise Exception(f"Cookie missing for {FLATS[flat]['display']}")
+        raise Exception(f"Cookie missing for {flats_info[flat]['display']}")
     return cookie
 
-def book_slot(api_url, booking_date, flat, slot, result, key):
-    headers = POSTMAN_HEADERS.copy()
-    headers["cookie"] = get_cookie(flat)
-
+def book_slot(flat, slot, api_url, facility_id, booking_date):
+    cookie = get_cookie(flat)
     payload = {
-        "facilityId": FACILITY_ID,
+        "facilityId": facility_id,
         "bookDate": booking_date,
         "slot": slot,
-        "flatId": FLATS[flat]["flat_id"]
+        "flatId": flats_info[flat]["flat_number"]
     }
+    headers = POSTMAN_HEADERS.copy()
+    headers["cookie"] = cookie
 
     try:
         r = requests.post(api_url, json=payload, headers=headers, timeout=10)
         data = r.json()
-        result[key] = {
-            "success": data.get("message") == "Amenity has been Reserved",
-            "slot": slot,
-            "flat": flat,
-            "facUserId": data.get("data", {}).get("facUserId")
-        }
-    except Exception as e:
-        result[key] = {
-            "success": False,
-            "slot": slot,
-            "flat": flat,
-            "facUserId": None,
-            "error": str(e)
-        }
+        success = data.get("message") == "Amenity has been Reserved"
+        facUserId = data.get("data", {}).get("facUserId")
+        return success, facUserId
+    except:
+        return False, None
 
-def try_parallel_slots(api_url, booking_date, flats, slots):
-    result = {}
-    t1 = threading.Thread(target=book_slot, args=(api_url, booking_date, flats[0], slots[0], result, 1))
-    t2 = threading.Thread(target=book_slot, args=(api_url, booking_date, flats[1], slots[1], result, 2))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
-    return result
+def attempt_slot(flat, slot, api_url, facility_id, booking_date):
+    for _ in range(ATTEMPTS_PER_SLOT):
+        success, facUserId = book_slot(flat, slot, api_url, facility_id, booking_date)
+        if success:
+            return True, facUserId
+        time.sleep(GAP_BETWEEN_ATTEMPTS)
+    return False, None
+
+def book_consecutive_slots(flat_pair, slots_pair, api_url, facility_id, booking_date):
+    results = []
+    for i in range(2):
+        success, facUserId = attempt_slot(flat_pair[i], slots_pair[i], api_url, facility_id, booking_date)
+        results.append((slots_pair[i], flat_pair[i], facUserId, success))
+    return results
 
 def main():
-    cfg = json.load(open(CONFIG_PATH))
-
-    global FACILITY_ID
-    FACILITY_ID = cfg["facilityId"]
-    api_url = cfg["api_url"]
-
-    today = now_ist().strftime("%A")
-    booking_date = (now_ist() + timedelta(days=2)).strftime("%d-%m-%Y")
-
-    # ⏳ Wait until 6 AM IST
-    wait_until_6_or_run_now()
-
-    flats_pair = cfg["weekday_flat_map"].get(today)
-    if not flats_pair:
-        send_telegram(f"No flat mapping configured for {today}")
+    try:
+        cfg = json.load(open(CONFIG_PATH))
+    except Exception as e:
+        send_telegram(f"🔥 Config load error: {e}")
         return
 
-    for f in flats_pair:
-        get_cookie(f)
+    facility_id = cfg.get("facilityId")
+    api_url = cfg.get("api_url")
 
-    slots = cfg["slots"]
+    booking_date = (now_ist() + timedelta(days=2)).strftime("%d-%m-%Y")
+    day_of_booking = (now_ist() + timedelta(days=2)).strftime("%A")
 
-    if today in ("Saturday", "Sunday"):
-        result = try_parallel_slots(api_url, booking_date, flats_pair, slots["night"])
-    else:
-        result = try_parallel_slots(api_url, booking_date, flats_pair, slots["morning"])
-        if not (result[1]["success"] and result[2]["success"]):
-            result = try_parallel_slots(api_url, booking_date, flats_pair, slots["night"])
+    # Only book on weekdays
+    if day_of_booking not in WEEKDAY_FLAT_PAIRS:
+        send_telegram(f"Date: {booking_date}\nDay: {day_of_booking}\nNo booking for weekends.")
+        return
 
-    success, failed = [], []
+    flats_pair = WEEKDAY_FLAT_PAIRS[day_of_booking]
 
-    for r in result.values():
-        name = FLATS[r["flat"]]["display"]
-        if r["success"]:
-            success.append(f"{r['slot']} → {name} → facUserId: {r['facUserId']}")
+    # Check cookies
+    for flat in flats_pair:
+        try:
+            get_cookie(flat)
+        except Exception as e:
+            send_telegram(str(e))
+            return
+
+    # Wait until 6 AM IST
+    wait_until_6_am()
+
+    # First try morning slots
+    booked_info = book_consecutive_slots(flats_pair, MORNING_SLOTS, api_url, facility_id, booking_date)
+
+    # If any failed, try evening slots
+    if not all([b[3] for b in booked_info]):
+        booked_info = book_consecutive_slots(flats_pair, EVENING_SLOTS, api_url, facility_id, booking_date)
+
+    # Prepare Telegram message
+    msg_lines = [f"Date: {booking_date}", f"Day: {day_of_booking}", ""]
+    failed_lines = []
+
+    for slot, flat, facUserId, success in booked_info:
+        if success:
+            msg_lines.append(f"{slot} → {flats_info[flat]['display']} → facUserId: {facUserId}")
         else:
-            failed.append(f"{r['slot']} → {name} → FAILED")
+            failed_lines.append(f"{slot} → {flats_info[flat]['display']} → FAILED")
 
-    msg = f"Date: {booking_date}\nDay: {today}\n\n"
-    if success:
-        msg += "✅ Booked:\n" + "\n".join(success) + "\n\n"
-    if failed:
-        msg += "❌ Failed:\n" + "\n".join(failed)
+    if failed_lines:
+        msg_lines.append("\n❌ Failed:")
+        msg_lines.extend(failed_lines)
 
-    send_telegram(msg.strip())
-    open(LOG_FILE, "w").write(msg)
+    send_telegram("\n".join(msg_lines))
+
+    # Write log
+    open(LOG_FILE, "w").write("\n".join(msg_lines))
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        send_telegram(f"Scheduler crashed:\n{e}")
+        send_telegram(f"🔥 Booking Alert Exception: {e}")
