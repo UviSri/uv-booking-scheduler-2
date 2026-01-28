@@ -41,7 +41,8 @@ FLATS = {
     "Flat_D":  {"flatId": "1711772", "env": "FLAT_D",  "name": "Dev"},
     "Flat_SD": {"flatId": "1711056", "env": "FLAT_SD", "name": "Sadu"},
     "Flat_SY": {"flatId": "1711289", "env": "FLAT_SY", "name": "Sanjay"},
-    "Flat_M":  {"flatId": "1711300", "env": "FLAT_M",  "name": "Manoj"},
+    # "Flat_M":  {"flatId": "1711300", "env": "FLAT_M",  "name": "Manoj"},
+    "Flat_M":  {"flatId": "1711289", "env": "FLAT_SY",  "name": "Manoj (Sanjay)"},
 }
 
 # Booking plan based on BOOKING DATE weekday
