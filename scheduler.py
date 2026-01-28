@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-Final Scheduler:
-- 5 flats (each with own cookie + flatId)
-- Booking date = Today + 2 (IST)
-- Weekday/weekend logic based on BOOKING DATE
-- 30-min paired slot booking
-- Simultaneous API hits
-- facUserId included
-- Telegram message for SUCCESS + FAILURE
+Final Scheduler
+- Waits until 06:00 IST if started early
+- Weekday flat pairing
+- Independent cookies per flat
+- Today + 2 days booking
+- Parallel 30-min slot booking
+- facUserId in Telegram
+- Booking Alert prefix for ALL Telegram messages
 """
 
 import os
 import json
+import time
 import threading
 import requests
 from datetime import datetime, timedelta
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
-
 CONFIG_PATH = "booking_config.json"
 LOG_FILE = "booking_log.txt"
 
@@ -30,148 +30,146 @@ POSTMAN_HEADERS = {
     "content-type": "application/json;charset=UTF-8",
     "origin": "https://in.adda.io",
     "referer": "https://in.adda.io/",
-    "user-agent": "Mozilla/5.0",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "x-requested-with": "XMLHttpRequest"
 }
 
-# ---------------- FLAT DEFINITIONS ----------------
-
+# Flat configuration
 FLATS = {
-    "Flat_Y":  {"flatId": "1711676", "env": "FLAT_Y",  "name": "Yuvi"},
-    "Flat_D":  {"flatId": "1711772", "env": "FLAT_D",  "name": "Dev"},
-    "Flat_SD": {"flatId": "1711056", "env": "FLAT_SD", "name": "Sadu"},
-    "Flat_SY": {"flatId": "1711289", "env": "FLAT_SY", "name": "Sanjay"},
-    # "Flat_M":  {"flatId": "1711300", "env": "FLAT_M",  "name": "Manoj"},
-    "Flat_M":  {"flatId": "1711289", "env": "FLAT_SY",  "name": "Manoj (Sanjay)"},
+    "Flat_Y":  {"flat_id": "1711676", "display": "Yuvi"},
+    "Flat_D":  {"flat_id": "1711772", "display": "Dev"},
+    "Flat_SD": {"flat_id": "1711056", "display": "Sadu"},
+    "Flat_M":  {"flat_id": "1711888", "display": "Manoj"},
+    "Flat_SY": {"flat_id": "1711289", "display": "Sanjay"}
 }
-
-# Booking plan based on BOOKING DATE weekday
-WEEKDAY_FLAT_MAP = {
-    "Monday":    ["Flat_SY", "Flat_SD"],
-    "Tuesday":   ["Flat_Y",  "Flat_D"],
-    "Wednesday": ["Flat_Y",  "Flat_SY"],
-    "Thursday":  ["Flat_M",  "Flat_SD"],
-    "Friday":    ["Flat_D",  "Flat_M"],
-    "Saturday":  ["Flat_Y",  "Flat_D"],
-    "Sunday":    ["Flat_Y",  "Flat_D"],
-}
-
-# Slot definitions
-MORNING_SLOTS = [
-    "07:00:00,07:30:00,0.00,0",
-    "07:30:00,08:00:00,0.00,0"
-]
-
-NIGHT_SLOTS = [
-    "20:00:00,20:30:00,0.00,0",
-    "20:30:00,21:00:00,0.00,0"
-]
-
-# -------------------------------------------------
 
 def now_ist():
     return datetime.now(IST)
 
-def send_telegram(msg):
+# 🔐 Wait logic (from your reference code)
+def wait_until_6_or_run_now():
+    now = now_ist()
+    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    if now >= target:
+        return
+
+    while True:
+        diff = (target - now_ist()).total_seconds()
+        if diff <= 2:
+            break
+        time.sleep(1)
+
+    while now_ist() < target:
+        pass
+
+# 📩 Telegram sender (always Booking Alert)
+def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
+    final_msg = f"🚨 Booking Alert 🚨\n\n{message}"
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": final_msg},
             timeout=10
         )
     except Exception:
         pass
 
 def get_cookie(flat):
-    cookie = os.getenv(FLATS[flat]["env"])
+    cookie = os.getenv(flat.upper())
     if not cookie:
-        raise Exception(f"Cookie missing for {FLATS[flat]['name']}")
+        raise Exception(f"Cookie missing for {FLATS[flat]['display']}")
     return cookie
 
-def book_slot(api_url, facility_id, booking_date, flat, slot, result, key):
+def book_slot(api_url, booking_date, flat, slot, result, key):
     headers = POSTMAN_HEADERS.copy()
     headers["cookie"] = get_cookie(flat)
 
     payload = {
-        "facilityId": facility_id,
+        "facilityId": FACILITY_ID,
         "bookDate": booking_date,
         "slot": slot,
-        "flatId": FLATS[flat]["flatId"]
+        "flatId": FLATS[flat]["flat_id"]
     }
 
     try:
         r = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        j = r.json()
+        data = r.json()
         result[key] = {
-            "success": j.get("message") == "Amenity has been Reserved",
-            "facUserId": j.get("data", {}).get("facUserId")
+            "success": data.get("message") == "Amenity has been Reserved",
+            "slot": slot,
+            "flat": flat,
+            "facUserId": data.get("data", {}).get("facUserId")
         }
-    except Exception:
-        result[key] = {"success": False, "facUserId": None}
+    except Exception as e:
+        result[key] = {
+            "success": False,
+            "slot": slot,
+            "flat": flat,
+            "facUserId": None,
+            "error": str(e)
+        }
 
-def try_pair(api_url, facility_id, booking_date, flats, slots):
+def try_parallel_slots(api_url, booking_date, flats, slots):
     result = {}
-
-    t1 = threading.Thread(target=book_slot,
-                          args=(api_url, facility_id, booking_date, flats[0], slots[0], result, 1))
-    t2 = threading.Thread(target=book_slot,
-                          args=(api_url, facility_id, booking_date, flats[1], slots[1], result, 2))
-
+    t1 = threading.Thread(target=book_slot, args=(api_url, booking_date, flats[0], slots[0], result, 1))
+    t2 = threading.Thread(target=book_slot, args=(api_url, booking_date, flats[1], slots[1], result, 2))
     t1.start(); t2.start()
     t1.join(); t2.join()
-
     return result
 
 def main():
     cfg = json.load(open(CONFIG_PATH))
-    facility_id = cfg["facilityId"]
+
+    global FACILITY_ID
+    FACILITY_ID = cfg["facilityId"]
     api_url = cfg["api_url"]
 
-    booking_date_dt = now_ist() + timedelta(days=2)
-    booking_date = booking_date_dt.strftime("%d-%m-%Y")
-    booking_day = booking_date_dt.strftime("%A")
+    today = now_ist().strftime("%A")
+    booking_date = (now_ist() + timedelta(days=2)).strftime("%d-%m-%Y")
 
-    flats = WEEKDAY_FLAT_MAP[booking_day]
+    # ⏳ Wait until 6 AM IST
+    wait_until_6_or_run_now()
 
-    # Validate cookies early
-    for f in flats:
+    flats_pair = cfg["weekday_flat_map"].get(today)
+    if not flats_pair:
+        send_telegram(f"No flat mapping configured for {today}")
+        return
+
+    for f in flats_pair:
         get_cookie(f)
 
-    success_info = []
-    failure_info = []
+    slots = cfg["slots"]
 
-    # Weekend → night only
-    slot_sets = [NIGHT_SLOTS] if booking_day in ("Saturday", "Sunday") else [MORNING_SLOTS, NIGHT_SLOTS]
-
-    for slots in slot_sets:
-        result = try_pair(api_url, facility_id, booking_date, flats, slots)
-
-        if result.get(1, {}).get("success") and result.get(2, {}).get("success"):
-            success_info = [
-                (slots[0], flats[0], result[1]["facUserId"]),
-                (slots[1], flats[1], result[2]["facUserId"]),
-            ]
-            break
-        else:
-            failure_info.append((slots, result))
-
-    msg = f"Booking Date: {booking_date} ({booking_day})\n\n"
-
-    if success_info:
-        msg += "✅ SUCCESS\n"
-        for slot, flat, fac in success_info:
-            msg += f"{slot} → {FLATS[flat]['name']} → facUserId: {fac}\n"
+    if today in ("Saturday", "Sunday"):
+        result = try_parallel_slots(api_url, booking_date, flats_pair, slots["night"])
     else:
-        msg += "❌ FAILED\n"
-        for slots, res in failure_info:
-            msg += f"\nAttempted Slots:\n"
-            for i, flat in enumerate(flats, start=1):
-                msg += f"{slots[i-1]} → {FLATS[flat]['name']} → ❌\n"
+        result = try_parallel_slots(api_url, booking_date, flats_pair, slots["morning"])
+        if not (result[1]["success"] and result[2]["success"]):
+            result = try_parallel_slots(api_url, booking_date, flats_pair, slots["night"])
+
+    success, failed = [], []
+
+    for r in result.values():
+        name = FLATS[r["flat"]]["display"]
+        if r["success"]:
+            success.append(f"{r['slot']} → {name} → facUserId: {r['facUserId']}")
+        else:
+            failed.append(f"{r['slot']} → {name} → FAILED")
+
+    msg = f"Date: {booking_date}\nDay: {today}\n\n"
+    if success:
+        msg += "✅ Booked:\n" + "\n".join(success) + "\n\n"
+    if failed:
+        msg += "❌ Failed:\n" + "\n".join(failed)
 
     send_telegram(msg.strip())
     open(LOG_FILE, "w").write(msg)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        send_telegram(f"Scheduler crashed:\n{e}")
