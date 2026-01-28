@@ -35,7 +35,7 @@ flats_info = {
     "Flat_D": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "Dev"},
     "Flat_SD": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Sadu"},
     # "Flat_M": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Manoj"},  # alias
-    "Flat_M": {"flat_number": "1711289", "cookie_env": "Flat_SY", "display": "Manoj (Sanjay)"}  # now own cookie
+    "Flat_M": {"flat_number": "1711289", "cookie_env": "Flat_SY", "display": "Manoj (Sanjay)"},  # now own cookie
     "Flat_SY": {"flat_number": "1711289", "cookie_env": "Flat_SY", "display": "Sanjay"}  # now own cookie
 }
 
