@@ -2,34 +2,38 @@ name: Daily Booking
 
 on:
   schedule:
-    - cron: "29 20 * * *"   # 05:59 AM IST daily
+    - cron: "29 20 * * *"   # 05:59 AM IST
   workflow_dispatch:
 
 jobs:
   run-booking:
     runs-on: ubuntu-latest
 
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      FLAT_Y:  ${{ secrets.FLAT_Y }}
+      FLAT_D:  ${{ secrets.FLAT_D }}
+      FLAT_SD: ${{ secrets.FLAT_SD }}
+      FLAT_SY: ${{ secrets.FLAT_SY }}
+      FLAT_M:  ${{ secrets.FLAT_M }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests pytz
 
       - name: Run Booking Scheduler
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          COOKIE: ${{ secrets.COOKIE }}
-        run: |
-          python scheduler.py
+        run: python scheduler.py
 
       - name: Upload Log Artifact
         uses: actions/upload-artifact@v4
