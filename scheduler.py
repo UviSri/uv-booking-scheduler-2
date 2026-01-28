@@ -1,170 +1,214 @@
-#!/usr/bin/env python3
-"""
-Scheduler with:
-- weekday flat pairing
-- flat reference mapping
-- cookies + flat number
-- paired 30-min booking
-- simultaneous API hits
-- facUserId in Telegram
-"""
-
 import os
+import sys
 import json
-import threading
 import requests
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime
 
-IST = pytz.timezone("Asia/Kolkata")
-CONFIG_PATH = "booking_config.json"
-LOG_FILE = "booking_log.txt"
+# =========================
+# CONFIG
+# =========================
 
+BOOKING_URL = "https://<YOUR_BOOKING_API_ENDPOINT>"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-POSTMAN_HEADERS = {
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-    "origin": "https://in.adda.io",
-    "referer": "https://in.adda.io/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-    "x-requested-with": "XMLHttpRequest"
+# =========================
+# FLAT → PERSON MAPPING
+# =========================
+
+FLAT_NAME_MAP = {
+    "Flat_SY": "Sanjay",
+    "Flat_SD": "Sadu",
+    "Flat_Y":  "Yuvi",
+    "Flat_D":  "Dev",
+    "Flat_M":  "Manoj"
 }
 
-# Flats mapping
-# flats_info = {
-#     "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_SY", "display": "Sanjay"},
-#     "Flat_SD": {"flat_number": "1711888", "cookie_env": "Flat_SD", "display": "Sadu"},
-#     "Flat_Y": {"flat_number": "1711999", "cookie_env": "Flat_Y", "display": "Yuvi"},
-#     "Flat_D": {"flat_number": "1712001", "cookie_env": "Flat_D", "display": "Dev"},
-#     "Flat_M": {"flat_number": "1712050", "cookie_env": "Flat_M", "display": "Manoj"},
+# =========================
+# FLAT → FLAT ID MAPPING
+# =========================
+
+FLAT_ID_MAP = {
+    "Flat_Y": 1711676,
+    "Flat_D": 1711772,
+    "Flat_SD": 1711056,
+    "Flat_M": 1711056,   # temp reuse
+    "Flat_SY": 1711289   # Sanjay has his own now
+}
+
+# =========================
+# DAY → FLAT MAPPING
+# =========================
+
+# DAY_FLAT_MAP = {
+#     "Monday":    ["Flat_SY", "Flat_SD"],
+#     "Tuesday":   ["Flat_Y",  "Flat_D"],
+#     "Wednesday": ["Flat_Y",  "Flat_SY"],
+#     "Thursday":  ["Flat_M",  "Flat_SD"],
+#     "Friday":    ["Flat_D",  "Flat_M"],
+#     "Saturday":  ["Flat_Y",  "Flat_D"],
+#     "Sunday":    ["Flat_Y",  "Flat_D"]
 # }
 
-############### Temporary ##################################
-flats_info = {
-    "Flat_Y": {"flat_number": "1711676", "cookie_env": "Flat_Y", "display": "Yuvi"},
-    "Flat_D": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "Dev"},
-    "Flat_SD": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "Sadu"},
-    "Flat_M": {"flat_number": "1711056", "cookie_env": "Flat_SD", "display": "(Sadu) Manoj"},  # alias Flat_SD
-    "Flat_SY": {"flat_number": "1711772", "cookie_env": "Flat_D", "display": "(Dev) Sanjay"}  # alias Flat_D
+# SY:3 , SD:3, D:4, Y:4
+
+DAY_FLAT_MAP = {
+    "Monday":    ["Flat_SY", "Flat_SD"],
+    "Tuesday":   ["Flat_Y",  "Flat_D"],
+    "Wednesday": ["Flat_Y",  "Flat_D"],
+    "Thursday":  ["Flat_SY",  "Flat_SD"],
+    "Friday":    ["Flat_Y",  "Flat_D"],
+    "Saturday":  ["Flat_Y",  "Flat_SY"],
+    "Sunday":    ["Flat_SD",  "Flat_D"]
 }
 
+# =========================
+# SLOT DEFINITIONS
+# =========================
 
-def now_ist():
-    return datetime.now(IST)
+MORNING_SLOTS = [
+    ("07:00:00", "07:30:00", "0.00", "0"),
+    ("07:30:00", "08:00:00", "0.00", "0")
+]
 
-def send_telegram(msg):
+EVENING_SLOTS = [
+    ("20:00:00", "20:30:00", "0.00", "0"),
+    ("20:30:00", "21:00:00", "0.00", "0")
+]
+
+# =========================
+# TELEGRAM
+# =========================
+
+def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram not configured")
         return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
-            timeout=10
-        )
-    except Exception:
-        pass
 
-def make_booking(api_url, booking_date, flat_ref, slot, result, key):
-    flat_number = flats_info[flat_ref]["flat_number"]
-    cookie = os.getenv(flats_info[flat_ref]["cookie_env"])
-
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
-        "facilityId": facility_id,
-        "bookDate": booking_date,
-        "slot": slot,
-        "flatId": flat_number
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    requests.post(url, json=payload)
+
+
+def telegram_success(flat, slot, fac_user_id):
+    msg = (
+        f"✅ *Booking Successful*\n"
+        f"👤 {FLAT_NAME_MAP[flat]} ({flat})\n"
+        f"🕒 {slot[0]} - {slot[1]}\n"
+        f"🆔 facUserId: `{fac_user_id}`"
+    )
+    send_telegram(msg)
+
+
+def telegram_failure(flat, slot, reason):
+    msg = (
+        f"❌ *Booking Failed*\n"
+        f"👤 {FLAT_NAME_MAP[flat]} ({flat})\n"
+        f"🕒 {slot[0]} - {slot[1]}\n"
+        f"⚠️ Reason: {reason}"
+    )
+    send_telegram(msg)
+
+# =========================
+# DISPLAY PLAN
+# =========================
+
+def display_booking_plan(day, flats, slots):
+    print("\n=== BOOKING PLAN ===")
+    print(f"Day: {day}\n")
+    print(f"{'Flat':<10} | {'Person':<10} | Slots")
+    print("-" * 55)
+    for flat in flats:
+        slot_str = ", ".join([f"{s[0]}-{s[1]}" for s in slots])
+        print(f"{flat:<10} | {FLAT_NAME_MAP[flat]:<10} | {slot_str}")
+    print("-" * 55)
+
+# =========================
+# BOOKING CORE
+# =========================
+
+def get_cookie(flat):
+    # IMPORTANT FIX:
+    # Secret is stored as FLAT_Y, FLAT_SD, etc.
+    key = flat.upper()
+    cookie = os.getenv(key)
+    if not cookie:
+        raise Exception(f"Cookie missing for {FLAT_NAME_MAP[flat]}")
+    return cookie
+
+
+def book_slot(flat, slot):
+    flat_id = FLAT_ID_MAP[flat]
+    cookie = get_cookie(flat)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Cookie": cookie
     }
 
-    headers = POSTMAN_HEADERS.copy()
-    headers["cookie"] = cookie
+    payload = {
+        "flat_id": flat_id,
+        "from_time": slot[0],
+        "to_time": slot[1],
+        "amount": slot[2],
+        "guest_count": slot[3]
+    }
 
     try:
-        r = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        data = r.json()
-        result[key] = {
-            "success": data.get("message") == "Amenity has been Reserved",
-            "facUserId": data.get("data", {}).get("facUserId")
-        }
+        response = requests.post(BOOKING_URL, headers=headers, json=payload, timeout=15)
+        return response.json()
     except Exception as e:
-        result[key] = {
-            "success": False,
-            "facUserId": None
-        }
+        return {"status": "error", "message": str(e)}
 
-def try_slot_pair(api_url, booking_date, flats_pair, slots_pair):
-    result = {}
 
-    t1 = threading.Thread(target=make_booking,
-                          args=(api_url, booking_date, flats_pair[0], slots_pair[0], result, 1))
-    t2 = threading.Thread(target=make_booking,
-                          args=(api_url, booking_date, flats_pair[1], slots_pair[1], result, 2))
+def attempt_slot(flat, slot):
+    response = book_slot(flat, slot)
 
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    if response.get("status") == "success":
+        fac_user_id = response["data"]["facUserId"]
+        telegram_success(flat, slot, fac_user_id)
+        return True
+    else:
+        telegram_failure(flat, slot, response.get("message", "Unknown error"))
+        return False
 
-    if result.get(1, {}).get("success") and result.get(2, {}).get("success"):
-        return True, result
-    return False, result
+
+def book_consecutive_slots(flat, slots):
+    for slot in slots:
+        if not attempt_slot(flat, slot):
+            return False
+    return True
+
+# =========================
+# DAY EXECUTION
+# =========================
+
+def run_day(day):
+    flats = DAY_FLAT_MAP[day]
+
+    if day in ["Saturday", "Sunday"]:
+        display_booking_plan(day, flats, EVENING_SLOTS)
+        for flat in flats:
+            book_consecutive_slots(flat, EVENING_SLOTS)
+    else:
+        display_booking_plan(day, flats, MORNING_SLOTS)
+        for flat in flats:
+            if not book_consecutive_slots(flat, MORNING_SLOTS):
+                display_booking_plan(day, [flat], EVENING_SLOTS)
+                book_consecutive_slots(flat, EVENING_SLOTS)
+
+# =========================
+# MAIN
+# =========================
 
 def main():
-    cfg = json.load(open(CONFIG_PATH))
-
-    today = now_ist().strftime("%A")
-    booking_date = (now_ist() + timedelta(days=2)).strftime("%d-%m-%Y")
-
-    flats_pair = cfg["weekday_flat_map"].get(today)
-    if not flats_pair:
-        send_telegram(f"❌ No flat mapping for {today}")
-        return
-
-    for f in flats_pair:
-        if not os.getenv(flats_info[f]["cookie_env"]):
-            send_telegram(f"🔒 COOKIE missing for {flats_info[f]['display']}")
-            return
-
-    global facility_id
-    facility_id = cfg["facilityId"]
-    api_url = cfg["api_url"]
-    slots = cfg["slots"]
-
-    booked_info = []
-
-    # Weekend logic
-    if today in ("Saturday", "Sunday"):
-        success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["night"])
-        if success:
-            booked_info = [
-                (slots["night"][0], flats_pair[0], res[1]["facUserId"]),
-                (slots["night"][1], flats_pair[1], res[2]["facUserId"])
-            ]
-    else:
-        # Weekday → morning first
-        success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["morning"])
-        if success:
-            booked_info = [
-                (slots["morning"][0], flats_pair[0], res[1]["facUserId"]),
-                (slots["morning"][1], flats_pair[1], res[2]["facUserId"])
-            ]
-        else:
-            success, res = try_slot_pair(api_url, booking_date, flats_pair, slots["night"])
-            if success:
-                booked_info = [
-                    (slots["night"][0], flats_pair[0], res[1]["facUserId"]),
-                    (slots["night"][1], flats_pair[1], res[2]["facUserId"])
-                ]
-
-    if booked_info:
-        msg = f"Booking Date: {booking_date}\nFlats: {flats_info[flats_pair[0]]['display']} & {flats_info[flats_pair[1]]['display']}\n\n"
-        for slot, flat_ref, fac_id in booked_info:
-            msg += f"{slot} → {flats_info[flat_ref]['display']} → facUserId: {fac_id}\n"
-
-        send_telegram(msg.strip())
-        open(LOG_FILE, "w").write(msg)
-    else:
-        send_telegram(f"Booking Date: {booking_date}\nNo slots available")
-        open(LOG_FILE, "w").write("No slots available")
+    today = datetime.now().strftime("%A")
+    print(f"\nRunning scheduler for: {today}")
+    run_day(today)
 
 if __name__ == "__main__":
     main()
