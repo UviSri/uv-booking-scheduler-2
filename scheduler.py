@@ -34,8 +34,8 @@ flats_info = {
     "Flat_Y": {"flat_number": "1711676", "cookie_env": "FLAT_Y", "display": "Yuvi"},
     "Flat_D": {"flat_number": "1711772", "cookie_env": "FLAT_D", "display": "Dev"},
     "Flat_SD": {"flat_number": "1711056", "cookie_env": "FLAT_SD", "display": "Sadu"},
-    "Flat_M": {"flat_number": "1711289", "cookie_env": "FLAT_M", "display": "Manoj"},
-    "Flat_SY": {"flat_number": "1711772", "cookie_env": "FLAT_SY", "display": "Sanjay"}
+    "Flat_M": {"flat_number": "1711772", "cookie_env": "FLAT_M", "display": "Manoj"},
+    "Flat_SY": {"flat_number": "1711289", "cookie_env": "FLAT_SY", "display": "Sanjay"}
 }
 
 # Attempts per slot
@@ -105,6 +105,30 @@ def try_slot_pair(api_url, booking_date, flats_pair, slots_pair):
 
     return result
 
+def wait_until_6am_or_run_now():
+    now = now_ist()
+    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    # If already past 6 AM IST, proceed immediately
+    if now >= target:
+        return
+
+    # Sleep until ~2 seconds before 6:00 AM
+    while True:
+        now = now_ist()
+        diff = (target - now).total_seconds()
+        if diff <= 2.0:
+            break
+        time.sleep(0.5)
+
+    # High-precision wait for final milliseconds
+    while now_ist() < target:
+        time.sleep(0.001)
+
+
+def now_ist():
+    return datetime.now(IST)
+
 def main():
     try:
         cfg = json.load(open(CONFIG_PATH, encoding="utf-8"))
@@ -137,7 +161,7 @@ def main():
             return
 
     booked_info = []
-
+    wait_until_6am_or_run_now()
     # Try morning slots first (2 consecutive 30-min slots)
     result = try_slot_pair(api_url, booking_date, flats_pair, slots_cfg["morning"])
     for idx, flat in enumerate(flats_pair, 1):
