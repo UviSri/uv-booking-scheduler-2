@@ -107,7 +107,7 @@ def try_slot_pair(api_url, booking_date, flats_pair, slots_pair):
 
 def wait_until_6am_or_run_now():
     now = now_ist()
-    target = now.replace(hour=6, minute=0, second=1, microsecond=0)
+    target = now.replace(hour=6, minute=0, second=25, microsecond=0)
 
     # If already past 6 AM IST, proceed immediately
     if now >= target:
